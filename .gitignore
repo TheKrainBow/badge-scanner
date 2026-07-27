@@ -1,0 +1,26 @@
+# Build
+.gradle/
+build/
+.cxx/
+.externalNativeBuild/
+captures/
+*.apk
+*.aab
+
+# Local machine config (SDK path, etc.)
+local.properties
+
+# IDE
+.idea/
+*.iml
+.kotlin/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Signing (in case a release config is added later)
+*.jks
+*.keystore
+keystore.properties
