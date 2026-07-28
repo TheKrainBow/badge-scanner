@@ -1,0 +1,40 @@
+# The reader-agent is intentionally NOT part of this compose file: it needs
+# direct access to a USB PC/SC reader (and a running pcscd) on the
+# operator's own machine, which doesn't make sense to containerize on a
+# server. Run it natively there — see reader-agent/'s section of README.md.
+services:
+  backend:
+    build: ./backend
+    environment:
+      API_CLIENT_ID: ${API_CLIENT_ID:?set API_CLIENT_ID in .env}
+      API_CLIENT_SECRET: ${API_CLIENT_SECRET:?set API_CLIENT_SECRET in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - backend-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: "" # relative — nginx proxies /api to the backend service, same-origin
+        VITE_API_CLIENT_ID: ${API_CLIENT_ID:?set API_CLIENT_ID in .env}
+        VITE_API_CLIENT_SECRET: ${API_CLIENT_SECRET:?set API_CLIENT_SECRET in .env}
+        VITE_READER_AGENT_URL: ${VITE_READER_AGENT_URL:-ws://127.0.0.1:17420/ws}
+    ports:
+      - "${FRONTEND_PORT:-8000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  backend-data:
