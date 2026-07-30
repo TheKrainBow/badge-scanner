@@ -27,6 +27,12 @@ export function UsersPage() {
 
   useEffect(reload, [query, type, coalition, scannedOnly, errorOnly, order]);
 
+  async function remove(row: UserRow) {
+    if (!confirm(`Remove ${row.login || row.entry.fullName} from the local cache?`)) return;
+    await api.deleteUser(row.entry.pk);
+    reload();
+  }
+
   return (
     <div>
       <h1>Users</h1>
@@ -71,6 +77,7 @@ export function UsersPage() {
               <th>Coalition</th>
               <th>Scans</th>
               <th>Last scan</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -88,6 +95,11 @@ export function UsersPage() {
                   {row.pendingCount > 0 && <span className="pill" style={{ marginLeft: 6 }}>{row.pendingCount} pending</span>}
                 </td>
                 <td className="muted">{row.lastScan ? new Date(row.lastScan).toLocaleString() : "—"}</td>
+                <td>
+                  <button className="btn danger row-actions" onClick={() => remove(row)}>
+                    Delete
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

@@ -9,6 +9,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -90,6 +91,34 @@ func (s *Store) migrate() error {
 			uid_hex TEXT PRIMARY KEY,
 			login TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			client_id TEXT NOT NULL UNIQUE,
+			secret_hash TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			permissions TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			last_used_at INTEGER NOT NULL DEFAULT 0,
+			rate_limit_per_minute INTEGER NOT NULL DEFAULT 0,
+			rate_limit_per_hour INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS intra_bulk_meta (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			fetched_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS api_key_usage (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			api_key_id INTEGER NOT NULL,
+			timestamp INTEGER NOT NULL,
+			uid_hex TEXT NOT NULL DEFAULT '',
+			found INTEGER NOT NULL DEFAULT 0,
+			login TEXT NOT NULL DEFAULT '',
+			coalition_name TEXT NOT NULL DEFAULT '',
+			coalition_color TEXT NOT NULL DEFAULT '',
+			coalition_image_url TEXT NOT NULL DEFAULT '',
+			photo_url TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_key_usage_key_ts ON api_key_usage(api_key_id, timestamp DESC)`,
 		`CREATE TABLE IF NOT EXISTS scan_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			timestamp INTEGER NOT NULL,
@@ -117,5 +146,37 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migrate: %w (stmt: %s)", err, stmt)
 		}
 	}
+
+	// Columns added after api_keys/api_key_usage's original CREATE TABLE
+	// already shipped: on a database created before this change, the
+	// CREATE TABLE IF NOT EXISTS statements above are no-ops, so these
+	// columns need an explicit, idempotent ALTER TABLE to actually reach
+	// it. New databases already get them from the CREATE TABLE above (this
+	// just no-ops there, "duplicate column name").
+	additions := []struct{ table, column, def string }{
+		{"api_keys", "rate_limit_per_minute", "INTEGER NOT NULL DEFAULT 0"},
+		{"api_keys", "rate_limit_per_hour", "INTEGER NOT NULL DEFAULT 0"},
+		{"api_key_usage", "coalition_name", "TEXT NOT NULL DEFAULT ''"},
+		{"api_key_usage", "coalition_color", "TEXT NOT NULL DEFAULT ''"},
+		{"api_key_usage", "photo_url", "TEXT NOT NULL DEFAULT ''"},
+		{"api_key_usage", "coalition_image_url", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, a := range additions {
+		if err := s.migrateAddColumn(a.table, a.column, a.def); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *Store) migrateAddColumn(table, column, def string) error {
+	_, err := s.DB.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, def))
+	if err != nil && !isDuplicateColumnErr(err) {
+		return fmt.Errorf("migrate: add column %s.%s: %w", table, column, err)
+	}
+	return nil
+}
+
+func isDuplicateColumnErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }

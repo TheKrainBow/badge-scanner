@@ -5,7 +5,6 @@ export function Nav() {
   const { user, logout } = useAuth();
   return (
     <nav className="nav">
-      <NavLink to="/scan">Scan</NavLink>
       <NavLink to="/history">History</NavLink>
       <NavLink to="/users">Users</NavLink>
       <NavLink to="/clusters">Clusters</NavLink>

@@ -1,6 +1,7 @@
 // Command server runs the badge-scanner webapp backend: REST API doing the
-// CA/42 fetches, SQLite storage, and the two auth layers (API client/secret
-// gate + user accounts).
+// CA/42 fetches, SQLite storage, user-account session auth for the
+// dashboard, and an optional scoped API-key gate for external non-browser
+// clients (see internal/auth's package doc comment).
 package main
 
 import (
@@ -14,17 +15,12 @@ import (
 	"badgescanner/backend/internal/intraclient"
 	"badgescanner/backend/internal/service"
 	"badgescanner/backend/internal/store"
+	"badgescanner/backend/internal/wshub"
 )
 
 func main() {
 	addr := envOr("LISTEN_ADDR", ":8080")
 	dbPath := envOr("DB_PATH", "badgescanner.db")
-
-	clientID := os.Getenv("API_CLIENT_ID")
-	clientSecret := os.Getenv("API_CLIENT_SECRET")
-	if clientID == "" || clientSecret == "" {
-		log.Fatal("API_CLIENT_ID and API_CLIENT_SECRET must be set — every request must present them")
-	}
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -43,6 +39,9 @@ func main() {
 	if err := authSvc.Bootstrap(os.Getenv("ADMIN_USERNAME"), os.Getenv("ADMIN_PASSWORD")); err != nil {
 		log.Fatalf("bootstrap admin: %v", err)
 	}
+	if err := authSvc.BootstrapAPIKey(os.Getenv("BOOTSTRAP_API_KEY_ID"), os.Getenv("BOOTSTRAP_API_KEY_SECRET")); err != nil {
+		log.Fatalf("bootstrap API key: %v", err)
+	}
 
 	caClient, err := caclient.New()
 	if err != nil {
@@ -50,8 +49,10 @@ func main() {
 	}
 	intraClient := intraclient.New()
 
+	hub := wshub.New()
 	svc := service.New(st, caClient, intraClient)
-	router := api.NewRouter(svc, authSvc, clientID, clientSecret)
+	svc.SetEvents(hub)
+	router := api.NewRouter(svc, authSvc, hub)
 
 	log.Printf("listening on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {

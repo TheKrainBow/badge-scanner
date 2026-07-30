@@ -1,94 +1,63 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { BlameStatus, ScanRecord } from "../api/types";
-
-const STATUS_LABEL: Record<BlameStatus, string> = {
-  NOT_HANDLED: "To handle",
-  PARDONED: "Pardoned",
-  TIGED: "TIGed",
-};
+import { useEvents } from "../events/EventsContext";
+import type { ApiKeyUsageEntry } from "../api/types";
 
 export function HistoryPage() {
-  const [records, setRecords] = useState<ScanRecord[]>([]);
+  const [rows, setRows] = useState<ApiKeyUsageEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const { subscribe } = useEvents();
 
-  function reload() {
-    setLoading(true);
+  useEffect(() => {
     api
-      .listHistory()
-      .then(setRecords)
+      .listAllApiKeyUsage()
+      .then((r) => setRows(r ?? []))
       .finally(() => setLoading(false));
-  }
+  }, []);
 
-  useEffect(reload, []);
-
-  async function setStatus(r: ScanRecord, status: BlameStatus) {
-    const updated = await api.patchHistory(r.id, { blameStatus: status });
-    setRecords((prev) => prev.map((x) => (x.id === r.id ? updated : x)));
-  }
-
-  async function remove(r: ScanRecord) {
-    await api.deleteHistory(r.id);
-    setRecords((prev) => prev.filter((x) => x.id !== r.id));
-  }
-
-  async function clearAll() {
-    if (!confirm("Clear the whole scan history?")) return;
-    await api.clearHistory();
-    setRecords([]);
-  }
+  useEffect(() => {
+    return subscribe("lookup", (event) => {
+      setRows((prev) => [
+        {
+          badger: event.keyName,
+          uidHex: event.uidHex,
+          login: event.login,
+          coalitionName: event.coalitionName,
+          coalitionColor: event.coalitionColor,
+          found: event.found,
+          timestamp: event.timestamp,
+        },
+        ...prev,
+      ]);
+    });
+  }, [subscribe]);
 
   return (
     <div>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1>History</h1>
-        <button className="btn danger" onClick={clearAll}>
-          Clear history
-        </button>
-      </div>
+      <h1>History</h1>
+      <p className="muted">Every badge lookup performed by any API key, newest first — updates live.</p>
 
       {loading ? (
         <p className="muted">Loading…</p>
+      ) : (rows ?? []).length === 0 ? (
+        <p className="muted">No badge lookups recorded yet.</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>When</th>
+              <th>Badger</th>
               <th>User</th>
-              <th>Badge</th>
-              <th>Blame</th>
-              <th></th>
+              <th>Coalition</th>
+              <th>Scanned at</th>
             </tr>
           </thead>
           <tbody>
-            {records.map((r) => (
-              <tr key={r.id}>
+            {(rows ?? []).map((r, i) => (
+              <tr key={i}>
+                <td>{r.badger}</td>
+                <td>{r.found ? r.login : <span className="muted">not found ({r.uidHex})</span>}</td>
+                <td style={{ color: r.coalitionColor || undefined }}>{r.coalitionName}</td>
                 <td className="muted">{new Date(r.timestamp).toLocaleString()}</td>
-                <td>
-                  <div className="row">
-                    {r.photoUrl && <img className="avatar" style={{ width: 28, height: 28 }} src={r.photoUrl} alt="" />}
-                    <span>{r.login ?? <span className="muted">{r.error ?? "unknown"}</span>}</span>
-                  </div>
-                </td>
-                <td className="muted">{r.wiegand}</td>
-                <td>
-                  {r.isBlame ? (
-                    <select value={r.blameStatus} onChange={(e) => setStatus(r, e.target.value as BlameStatus)}>
-                      {(Object.keys(STATUS_LABEL) as BlameStatus[]).map((s) => (
-                        <option key={s} value={s}>
-                          {STATUS_LABEL[s]}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="muted">scan only</span>
-                  )}
-                </td>
-                <td>
-                  <button className="btn secondary" onClick={() => remove(r)}>
-                    Delete
-                  </button>
-                </td>
               </tr>
             ))}
           </tbody>

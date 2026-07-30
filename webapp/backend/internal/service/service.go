@@ -18,13 +18,21 @@ import (
 )
 
 type Service struct {
-	Store *store.Store
-	CA    *caclient.Client
-	Intra *intraclient.Client
+	Store  *store.Store
+	CA     *caclient.Client
+	Intra  *intraclient.Client
+	Events EventSink // nil until SetEvents is called; every use site checks for nil
 }
 
 func New(st *store.Store, ca *caclient.Client, intra *intraclient.Client) *Service {
 	return &Service{Store: st, CA: ca, Intra: intra}
+}
+
+// SetEvents wires a live-event sink after construction — main.go builds the
+// wshub.Hub and the Service separately (the hub doesn't need the service,
+// only the reverse), then connects them with this call.
+func (s *Service) SetEvents(e EventSink) {
+	s.Events = e
 }
 
 func (s *Service) caConfig(a store.AppSettings) caclient.Config {
@@ -45,137 +53,159 @@ type ScanOutcome struct {
 	Entry  *store.CADirEntry `json:"entry,omitempty"`
 }
 
-// Scan is the server-side port of ScanViewModel.process(): Wiegand → CA
-// directory cache lookup → manual link fallback → intra cache/live
-// resolve → history write.
-func (s *Service) Scan(uidHex string) (ScanOutcome, error) {
+// resolvedBadge is the shared core result of resolving a badge UID to an
+// identity: Wiegand → CA directory cache lookup → manual link fallback →
+// intra cache/live resolve. No side effects (no history write) — that's
+// deliberately left to callers, since Scan and Lookup want different
+// side-effect/response shapes from the same resolution logic.
+type resolvedBadge struct {
+	codes                                            wiegand.Codes
+	login, ftID, photoURL, matchedBadgeID, userType  string
+	coalitionName, coalitionColor, coalitionImageURL string
+	matchedEntry                                     *store.CADirEntry
+	scanErr                                          string
+}
+
+// resolveBadge is the server-side port of ScanViewModel.process()'s
+// resolution half (everything before the history write).
+func (s *Service) resolveBadge(uidHex string) (resolvedBadge, error) {
 	codes, err := wiegand.FromUIDHex(uidHex)
 	if err != nil {
-		return ScanOutcome{}, err
+		return resolvedBadge{}, err
 	}
 
 	settings, err := s.Store.GetSettings()
 	if err != nil {
-		return ScanOutcome{}, err
+		return resolvedBadge{}, err
 	}
 
-	var login, ftID, photoURL, matchedBadgeID, userType, coalitionName, coalitionColor, coalitionImageURL string
-	var matchedEntry *store.CADirEntry
-	var scanErr string
+	rb := resolvedBadge{codes: codes}
 
 	if !settings.CAConfigured() {
-		scanErr = "CA credentials are not configured (see Admin settings)"
+		rb.scanErr = "CA credentials are not configured (see Admin settings)"
 	} else {
 		entry, badgeNum, found, err := s.Store.FindByBadge(codes.CACandidates())
 		if err != nil {
-			return ScanOutcome{}, err
+			return resolvedBadge{}, err
 		}
 		if !found {
 			manualLogin, hasManual, err := s.Store.GetManualLink(codes.UIDHex)
 			if err != nil {
-				return ScanOutcome{}, err
+				return resolvedBadge{}, err
 			}
 			if hasManual {
-				login = manualLogin
+				rb.login = manualLogin
 				entries, _ := s.Store.ListCADirectory()
 				for _, e := range entries {
 					if strings.EqualFold(e.DisplayLogin(), manualLogin) {
 						ec := e
-						matchedEntry = &ec
+						rb.matchedEntry = &ec
 						break
 					}
 				}
 			} else {
 				dirEntries, _ := s.Store.ListCADirectory()
-				scanErr = fmt.Sprintf(
+				rb.scanErr = fmt.Sprintf(
 					"Badge not in CA directory (tried %s; %d users cached). "+
 						"If this badge is new, use “Refetch CA users” in Admin, or associate it to a student.",
 					strings.Join(codes.CACandidates(), ", "), len(dirEntries))
 			}
 		} else {
-			matchedBadgeID = strconv.FormatInt(badgeNum, 10)
+			rb.matchedBadgeID = strconv.FormatInt(badgeNum, 10)
 			ec := entry
-			matchedEntry = &ec
-			login = entry.FTLogin
-			ftID = entry.FTId
-			if login == "" && ftID == "" {
-				login = logins.PiscineLoginFromName(entry.FullName)
+			rb.matchedEntry = &ec
+			rb.login = entry.FTLogin
+			rb.ftID = entry.FTId
+			if rb.login == "" && rb.ftID == "" {
+				rb.login = logins.PiscineLoginFromName(entry.FullName)
 			}
-			if login == "" && ftID == "" {
+			if rb.login == "" && rb.ftID == "" {
 				name := entry.FullName
 				if name == "" {
 					name = strconv.FormatInt(entry.PK, 10)
 				}
-				scanErr = fmt.Sprintf("CA user %s has no ft_login and no ft_id", name)
+				rb.scanErr = fmt.Sprintf("CA user %s has no ft_login and no ft_id", name)
 			}
 		}
 	}
 
-	if scanErr == "" {
+	if rb.scanErr == "" {
 		if !settings.FTConfigured() {
-			if login == "" {
-				scanErr = "42 API credentials are not configured (see Admin settings)"
+			if rb.login == "" {
+				rb.scanErr = "42 API credentials are not configured (see Admin settings)"
 			}
-		} else if matchedEntry != nil {
-			cacheKey := ftID
+		} else if rb.matchedEntry != nil {
+			cacheKey := rb.ftID
 			if cacheKey == "" {
-				cacheKey = login
+				cacheKey = rb.login
 			}
 			if cacheKey != "" {
 				if cached, ok, err := s.Store.PeekIntra(cacheKey); err == nil && ok {
 					if cached.Login != nil {
-						login = *cached.Login
+						rb.login = *cached.Login
 					}
 					if cached.FTId != nil {
-						ftID = *cached.FTId
+						rb.ftID = *cached.FTId
 					}
-					photoURL = derefOr(cached.PhotoURL, "")
-					userType = derefOr(cached.UserType, "")
-					coalitionName = derefOr(cached.CoalitionName, "")
-					coalitionColor = derefOr(cached.CoalitionColor, "")
-					coalitionImageURL = derefOr(cached.CoalitionImageURL, "")
+					rb.photoURL = derefOr(cached.PhotoURL, "")
+					rb.userType = derefOr(cached.UserType, "")
+					rb.coalitionName = derefOr(cached.CoalitionName, "")
+					rb.coalitionColor = derefOr(cached.CoalitionColor, "")
+					rb.coalitionImageURL = derefOr(cached.CoalitionImageURL, "")
 				}
 			}
 		} else {
-			info, err := s.resolveIntra(settings, login, ftID)
+			info, err := s.resolveIntra(settings, rb.login, rb.ftID)
 			if err != nil {
-				if login == "" {
-					scanErr = err.Error()
+				if rb.login == "" {
+					rb.scanErr = err.Error()
 				}
 			} else if info != nil {
 				if info.Login != nil {
-					login = *info.Login
+					rb.login = *info.Login
 				}
 				if info.FTId != nil {
-					ftID = *info.FTId
+					rb.ftID = *info.FTId
 				}
-				photoURL = derefOr(info.PhotoURL, "")
-				userType = derefOr(info.UserType, "")
-				coalitionName = derefOr(info.CoalitionName, "")
-				coalitionColor = derefOr(info.CoalitionColor, "")
-				coalitionImageURL = derefOr(info.CoalitionImageURL, "")
+				rb.photoURL = derefOr(info.PhotoURL, "")
+				rb.userType = derefOr(info.UserType, "")
+				rb.coalitionName = derefOr(info.CoalitionName, "")
+				rb.coalitionColor = derefOr(info.CoalitionColor, "")
+				rb.coalitionImageURL = derefOr(info.CoalitionImageURL, "")
 			}
 		}
 	}
 
-	wiegandVal := codes.Wiegand26
-	if matchedBadgeID != "" {
-		wiegandVal = matchedBadgeID
+	return rb, nil
+}
+
+// Scan is the server-side port of ScanViewModel.process(): resolves the
+// badge via resolveBadge, then writes a scan_history record (which is
+// what carries the blame/TIG fields — see store.ScanRecord).
+func (s *Service) Scan(uidHex string) (ScanOutcome, error) {
+	rb, err := s.resolveBadge(uidHex)
+	if err != nil {
+		return ScanOutcome{}, err
+	}
+
+	wiegandVal := rb.codes.Wiegand26
+	if rb.matchedBadgeID != "" {
+		wiegandVal = rb.matchedBadgeID
 	}
 	record := store.ScanRecord{
 		Timestamp: time.Now().UnixMilli(),
-		UIDHex:    codes.UIDHex,
-		MifareHex: codes.MifareHex,
+		UIDHex:    rb.codes.UIDHex,
+		MifareHex: rb.codes.MifareHex,
 		Wiegand:   wiegandVal,
-		Login:     strPtrOrNil(login),
-		FTId:      strPtrOrNil(ftID),
-		PhotoURL:  strPtrOrNil(photoURL),
-		Error:     strPtrOrNil(scanErr),
-		UserType:  strPtrOrNil(userType),
+		Login:     strPtrOrNil(rb.login),
+		FTId:      strPtrOrNil(rb.ftID),
+		PhotoURL:  strPtrOrNil(rb.photoURL),
+		Error:     strPtrOrNil(rb.scanErr),
+		UserType:  strPtrOrNil(rb.userType),
 
-		CoalitionName:     strPtrOrNil(coalitionName),
-		CoalitionColor:    strPtrOrNil(coalitionColor),
-		CoalitionImageURL: strPtrOrNil(coalitionImageURL),
+		CoalitionName:     strPtrOrNil(rb.coalitionName),
+		CoalitionColor:    strPtrOrNil(rb.coalitionColor),
+		CoalitionImageURL: strPtrOrNil(rb.coalitionImageURL),
 	}
 	saved, err := s.Store.AddScanRecord(record)
 	if err != nil {
@@ -183,13 +213,53 @@ func (s *Service) Scan(uidHex string) (ScanOutcome, error) {
 	}
 
 	switch {
-	case scanErr == "" && login != "" && matchedEntry != nil:
-		return ScanOutcome{Status: "user", Record: saved, Entry: matchedEntry}, nil
-	case scanErr == "" && login != "":
+	case rb.scanErr == "" && rb.login != "" && rb.matchedEntry != nil:
+		return ScanOutcome{Status: "user", Record: saved, Entry: rb.matchedEntry}, nil
+	case rb.scanErr == "" && rb.login != "":
 		return ScanOutcome{Status: "success", Record: saved}, nil
 	default:
 		return ScanOutcome{Status: "failure", Record: saved}, nil
 	}
+}
+
+// LookupResult is the deliberately narrow shape returned to scoped
+// "lookup"-permission API keys (the C client): login + coalition theming +
+// photo only. No ftId, level, currentProjects, location, coalition ids, CA
+// entry pk, or anything scan_history/blame/TIG-shaped — those fields
+// simply have no field to land in here.
+type LookupResult struct {
+	Found             bool   `json:"found"`
+	Login             string `json:"login,omitempty"`
+	CoalitionName     string `json:"coalitionName,omitempty"`
+	CoalitionColor    string `json:"coalitionColor,omitempty"`
+	CoalitionImageURL string `json:"coalitionImageUrl,omitempty"`
+	PhotoURL          string `json:"photoUrl,omitempty"`
+}
+
+// Lookup is the restricted counterpart to Scan for the C badge-lookup
+// client: same resolution (resolveBadge), but writes nothing to
+// scan_history and returns only LookupResult's allowlisted fields. A
+// "lookup"-scope API key can only ever reach this method (see api.go's
+// route wiring — /api/lookup is the sole route behind that scope), so it's
+// structurally unable to see blame/TIG/points data, not just asked nicely
+// not to: that data lives solely in store.ScanRecord, which only Scan
+// writes to and which Lookup never touches.
+func (s *Service) Lookup(uidHex string) (LookupResult, error) {
+	rb, err := s.resolveBadge(uidHex)
+	if err != nil {
+		return LookupResult{}, err
+	}
+	if rb.scanErr != "" || rb.login == "" {
+		return LookupResult{Found: false}, nil
+	}
+	return LookupResult{
+		Found:             true,
+		Login:             rb.login,
+		CoalitionName:     rb.coalitionName,
+		CoalitionColor:    rb.coalitionColor,
+		CoalitionImageURL: rb.coalitionImageURL,
+		PhotoURL:          rb.photoURL,
+	}, nil
 }
 
 // resolveIntra mirrors ScanViewModel.resolveIntra: 12h-cache-or-fetch.

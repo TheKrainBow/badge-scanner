@@ -118,8 +118,8 @@ export function UserDetailPage() {
             {detail.location && ` · Online at ${detail.location}`}
             {detail.level != null && ` · Level ${detail.level.toFixed(2)}`}
           </div>
-          {detail.currentProjects.length > 0 && (
-            <div className="muted">Working on: {detail.currentProjects.join(", ")}</div>
+          {(detail.currentProjects ?? []).length > 0 && (
+            <div className="muted">Working on: {(detail.currentProjects ?? []).join(", ")}</div>
           )}
         </div>
         <div style={{ flex: 1 }} />
@@ -183,7 +183,7 @@ export function UserDetailPage() {
 
       <div className="card">
         <h3>Scans</h3>
-        {detail.scans.length === 0 ? (
+        {(detail.scans ?? []).length === 0 ? (
           <p className="muted">No blames recorded for this user.</p>
         ) : (
           <table>
@@ -195,7 +195,7 @@ export function UserDetailPage() {
               </tr>
             </thead>
             <tbody>
-              {detail.scans.map((s) => (
+              {(detail.scans ?? []).map((s) => (
                 <tr key={s.id}>
                   <td className="muted">{new Date(s.timestamp).toLocaleString()}</td>
                   <td>{s.reason ?? "—"}</td>

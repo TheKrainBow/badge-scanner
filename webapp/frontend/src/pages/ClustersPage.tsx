@@ -16,8 +16,11 @@ export function ClustersPage() {
     api
       .getClusters(force)
       .then((d) => {
-        setData(d);
-        if (d.clusters.length > 0) setActiveCluster((cur) => cur ?? d.clusters[0].id);
+        // Go nil slices/maps marshal to JSON null, not []/{} — normalize
+        // once here rather than guarding every usage site below.
+        const normalized: ClusterData = { clusters: d.clusters ?? [], layouts: d.layouts ?? {}, occupants: d.occupants ?? {} };
+        setData(normalized);
+        if (normalized.clusters.length > 0) setActiveCluster((cur) => cur ?? normalized.clusters[0].id);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load clusters"))
       .finally(() => setLoading(false));

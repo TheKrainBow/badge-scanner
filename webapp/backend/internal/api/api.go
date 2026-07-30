@@ -1,5 +1,8 @@
-// Package api wires the HTTP routes: the client-id/secret gate, user
-// session auth, and handlers delegating to internal/service.
+// Package api wires the HTTP routes: user session auth (the dashboard's
+// sole auth layer — no API key required, see auth.go's doc comment on why),
+// the scoped API-key gate for external non-browser clients (the C
+// badge-lookup client's "lookup" scope), and handlers delegating to
+// internal/service.
 package api
 
 import (
@@ -11,15 +14,17 @@ import (
 
 	"badgescanner/backend/internal/auth"
 	"badgescanner/backend/internal/service"
+	"badgescanner/backend/internal/wshub"
 )
 
 type API struct {
 	svc  *service.Service
 	auth *auth.Service
+	hub  *wshub.Hub
 }
 
-func NewRouter(svc *service.Service, authSvc *auth.Service, clientID, clientSecret string) http.Handler {
-	a := &API{svc: svc, auth: authSvc}
+func NewRouter(svc *service.Service, authSvc *auth.Service, hub *wshub.Hub) http.Handler {
+	a := &API{svc: svc, auth: authSvc, hub: hub}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -30,10 +35,6 @@ func NewRouter(svc *service.Service, authSvc *auth.Service, clientID, clientSecr
 	})
 
 	r.Route("/api", func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler {
-			return auth.RequireClientCredentials(clientID, clientSecret, next)
-		})
-
 		r.Post("/auth/login", a.login)
 		r.Post("/auth/logout", a.logout)
 
@@ -74,7 +75,40 @@ func NewRouter(svc *service.Service, authSvc *auth.Service, clientID, clientSecr
 				r.Post("/admin/users", a.createAccount)
 				r.Delete("/admin/users/{id}", a.deleteAccount)
 				r.Patch("/admin/users/{id}", a.patchAccount)
+
+				r.Post("/intra/refresh", a.refreshIntraUsers)
+				r.Get("/intra/info", a.intraInfo)
+				r.Post("/coalitions/refresh", a.refreshCoalitions)
+
+				r.Get("/admin/api-keys", a.listAPIKeys)
+				r.Post("/admin/api-keys", a.createAPIKey)
+				r.Get("/admin/api-keys/{id}", a.getAPIKey)
+				r.Patch("/admin/api-keys/{id}", a.updateAPIKey)
+				r.Delete("/admin/api-keys/{id}", a.deleteAPIKey)
+				r.Get("/admin/api-keys/{id}/usage", a.listAPIKeyUsage)
+				r.Get("/admin/api-keys/usage", a.listAllAPIKeyUsage)
 			})
+		})
+
+		// Separate gate: the C badge-lookup client never logs in
+		// (no user session), it only ever needs "lookup" scope to reach
+		// these routes (POST for a one-shot lookup, GET+upgrade for the
+		// persistent WS mode, GET for its own past lookups so it can
+		// rebuild state after a restart). See service.Lookup's doc comment
+		// for why this can't leak blame/TIG/points data even by future
+		// accident.
+		r.Group(func(r chi.Router) {
+			r.Use(authSvc.RequireAPIKeyPermission("lookup"))
+			r.Post("/lookup", a.lookup)
+			r.Get("/lookup/ws", a.lookupWS)
+			r.Get("/lookup/history", a.lookupHistory)
+		})
+
+		// The browser dashboard's live feed — gated by session cookie only,
+		// same as every other browser route.
+		r.Group(func(r chi.Router) {
+			r.Use(authSvc.RequireSession)
+			r.Get("/events", a.events)
 		})
 	})
 

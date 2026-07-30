@@ -1,21 +1,29 @@
-// Typed fetch client: attaches the client-id/secret headers on every
-// request and the session cookie via credentials: "include", matching the
-// two auth layers the backend enforces.
+// Typed fetch client: sends the session cookie via credentials: "include"
+// on every request — the dashboard's only auth layer (see
+// backend/internal/auth/auth.go's package doc comment for why it doesn't
+// also need an API-key header: that used to be required here too, but a
+// key deletable from this same dashboard's own Admin page was a pure
+// self-lockout risk with no compensating security benefit over the session
+// cookie already in place).
 import type {
   Account,
+  ApiKey,
+  ApiKeyCreated,
+  ApiKeyScope,
+  ApiKeyUpdate,
+  ApiKeyUsage,
+  ApiKeyUsageEntry,
   AppSettings,
   CADirectoryInfo,
   ClusterData,
   ClusterOccupant,
-  ScanOutcome,
+  IntraBulkInfo,
   ScanRecord,
   UserDetail,
   UserRow,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
-const CLIENT_ID = import.meta.env.VITE_API_CLIENT_ID ?? "";
-const CLIENT_SECRET = import.meta.env.VITE_API_CLIENT_SECRET ?? "";
 
 export class ApiError extends Error {
   status: number;
@@ -30,8 +38,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     credentials: "include",
     headers: {
-      "X-Client-Id": CLIENT_ID,
-      "X-Client-Secret": CLIENT_SECRET,
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
@@ -71,16 +77,7 @@ export const api = {
   logout: () => post<{ ok: boolean }>("/api/auth/logout"),
   me: () => get<Account>("/api/auth/me"),
 
-  scan: (uidHex: string) => post<ScanOutcome>("/api/scan", { uidHex }),
   associateBadge: (uidHex: string, login: string) => post<ScanRecord>("/api/badges/associate", { uidHex, login }),
-
-  listHistory: (limit = 200, offset = 0) => get<ScanRecord[]>(`/api/history?limit=${limit}&offset=${offset}`),
-  patchHistory: (
-    id: number,
-    patchBody: { reason?: string; blameStatus?: string; tigDuration?: string },
-  ) => patch<ScanRecord>(`/api/history/${id}`, patchBody),
-  deleteHistory: (id: number) => del<{ ok: boolean }>(`/api/history/${id}`),
-  clearHistory: () => del<{ ok: boolean }>("/api/history"),
 
   listUsers: (params: {
     query?: string;
@@ -110,11 +107,20 @@ export const api = {
   giveTig: (pk: number, durationSeconds: number, reason: string) =>
     post<{ message: string }>("/api/tig", { pk, durationSeconds, reason }),
 
-  getClusters: (force = false) => get<ClusterData>(`/api/clusters?force=${force}`),
+  getClusters: (force = false) =>
+    get<{
+      clusters: ClusterData["clusters"] | null;
+      layouts: ClusterData["layouts"] | null;
+      occupants: ClusterData["occupants"] | null;
+    }>(`/api/clusters?force=${force}`),
   refreshOccupants: () => post<Record<string, ClusterOccupant>>("/api/clusters/refresh-occupants"),
 
   caInfo: () => get<CADirectoryInfo>("/api/ca/info"),
   refreshCADirectory: () => post<{ count: number }>("/api/ca/refresh"),
+
+  intraInfo: () => get<IntraBulkInfo>("/api/intra/info"),
+  refreshIntraUsers: () => post<{ count: number }>("/api/intra/refresh"),
+  refreshCoalitions: () => post<{ count: number }>("/api/coalitions/refresh"),
 
   getSettings: () => get<AppSettings>("/api/admin/settings"),
   putSettings: (settings: AppSettings) => put<AppSettings>("/api/admin/settings", settings),
@@ -125,4 +131,13 @@ export const api = {
   deleteAccount: (id: number) => del<{ ok: boolean }>(`/api/admin/users/${id}`),
   patchAccount: (id: number, patchBody: { password?: string; isAdmin?: boolean }) =>
     patch<Account>(`/api/admin/users/${id}`, patchBody),
+
+  listApiKeys: () => get<ApiKey[]>("/api/admin/api-keys"),
+  getApiKey: (id: number) => get<ApiKey>(`/api/admin/api-keys/${id}`),
+  createApiKey: (name: string, permissions: ApiKeyScope[], rateLimitPerMinute = 0, rateLimitPerHour = 0) =>
+    post<ApiKeyCreated>("/api/admin/api-keys", { name, permissions, rateLimitPerMinute, rateLimitPerHour }),
+  updateApiKey: (id: number, update: ApiKeyUpdate) => patch<ApiKey>(`/api/admin/api-keys/${id}`, update),
+  deleteApiKey: (id: number) => del<{ ok: boolean }>(`/api/admin/api-keys/${id}`),
+  apiKeyUsage: (id: number) => get<ApiKeyUsage[]>(`/api/admin/api-keys/${id}/usage`),
+  listAllApiKeyUsage: () => get<ApiKeyUsageEntry[]>("/api/admin/api-keys/usage"),
 };

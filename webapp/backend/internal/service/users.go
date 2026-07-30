@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"badgescanner/backend/internal/intraclient"
 	"badgescanner/backend/internal/store"
 )
 
@@ -324,12 +325,18 @@ func (s *Service) RefreshUserProfile(pk int64) error {
 	if err != nil || entry == nil {
 		return err
 	}
+	return s.refreshProfileForEntry(s.intraConfig(settings), *entry)
+}
+
+// refreshProfileForEntry is RefreshUserProfile's per-entry core, shared
+// with RefreshAllIntraUsers (directory.go) so the bulk admin refresh
+// doesn't duplicate this logic.
+func (s *Service) refreshProfileForEntry(cfg intraclient.Config, entry store.CADirEntry) error {
 	key := entry.IntraKey()
 	if key == "" {
 		return nil
 	}
 	cached, _, _ := s.Store.PeekIntra(key)
-	cfg := s.intraConfig(settings)
 	user, err := s.Intra.FetchUser(cfg, entry.FTId, entry.DisplayLogin())
 	if err != nil {
 		cached.ProfileError = true
@@ -365,6 +372,12 @@ func (s *Service) RefreshUserCoalition(pk int64) error {
 	if err != nil || entry == nil {
 		return err
 	}
+	return s.refreshCoalitionForEntry(s.intraConfig(settings), *entry)
+}
+
+// refreshCoalitionForEntry is RefreshUserCoalition's per-entry core, shared
+// with RefreshAllCoalitions (directory.go).
+func (s *Service) refreshCoalitionForEntry(cfg intraclient.Config, entry store.CADirEntry) error {
 	key := entry.IntraKey()
 	if key == "" {
 		return nil
@@ -377,7 +390,6 @@ func (s *Service) RefreshUserCoalition(pk int64) error {
 	if login == "" {
 		return nil
 	}
-	cfg := s.intraConfig(settings)
 	coalitions, err := s.Intra.FetchCoalitions(cfg, login)
 	if err != nil {
 		cached.CoalitionError = true

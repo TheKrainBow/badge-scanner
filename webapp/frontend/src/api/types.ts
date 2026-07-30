@@ -60,8 +60,8 @@ export interface UserDetail {
   coalitionsUserId?: number;
   location: string;
   level?: number;
-  currentProjects: string[];
-  scans: ScanRecord[];
+  currentProjects: string[] | null;
+  scans: ScanRecord[] | null;
 }
 
 export interface AppSettings {
@@ -125,4 +125,43 @@ export interface ClusterData {
 export interface CADirectoryInfo {
   userCount: number;
   fetchedAt: number;
+}
+
+export type IntraBulkInfo = CADirectoryInfo;
+
+export type ApiKeyScope = "full" | "lookup";
+
+export interface ApiKey {
+  id: number;
+  clientId: string;
+  name: string;
+  permissions: ApiKeyScope[];
+  createdAt: number;
+  lastUsedAt: number;
+  rateLimitPerMinute: number;
+  rateLimitPerHour: number;
+}
+
+export interface ApiKeyCreated extends ApiKey {
+  clientSecret: string;
+}
+
+export interface ApiKeyUpdate {
+  name: string;
+  permissions: ApiKeyScope[];
+  rateLimitPerMinute: number;
+  rateLimitPerHour: number;
+}
+
+export interface ApiKeyUsage {
+  timestamp: number;
+  uidHex: string;
+  found: boolean;
+  login?: string;
+  coalitionName?: string;
+  coalitionColor?: string;
+}
+
+export interface ApiKeyUsageEntry extends ApiKeyUsage {
+  badger: string;
 }

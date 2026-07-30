@@ -26,7 +26,7 @@ export function AssociatePage() {
     setError(null);
     try {
       await api.associateBadge(uidHex, login);
-      navigate("/scan");
+      navigate("/users");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to associate badge");
     } finally {

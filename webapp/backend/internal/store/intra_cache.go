@@ -141,6 +141,25 @@ func (s *Store) AllIntra() (map[string]IntraInfo, error) {
 	return out, nil
 }
 
+// ReplaceIntraBulkMeta upserts the last-bulk-refresh timestamp — parity
+// with ca_directory_meta/ReplaceCADirectory (ca_directory.go), so the
+// "Refetch 42 users" admin section can show a last-fetched time the same
+// way the CA directory section does.
+func (s *Store) ReplaceIntraBulkMeta(fetchedAt int64) error {
+	_, err := s.DB.Exec(`INSERT INTO intra_bulk_meta (id, fetched_at) VALUES (1, ?)
+		ON CONFLICT(id) DO UPDATE SET fetched_at = excluded.fetched_at`, fetchedAt)
+	return err
+}
+
+func (s *Store) IntraBulkFetchedAt() (int64, error) {
+	var fetchedAt int64
+	err := s.DB.QueryRow(`SELECT fetched_at FROM intra_bulk_meta WHERE id = 1`).Scan(&fetchedAt)
+	if err != nil {
+		return 0, nil // no rows yet -> 0
+	}
+	return fetchedAt, nil
+}
+
 func nullToPtr(n sql.NullString) *string {
 	if !n.Valid {
 		return nil

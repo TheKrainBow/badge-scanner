@@ -27,7 +27,8 @@ a {
 
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .nav {
@@ -39,6 +40,8 @@ a {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .nav a {
@@ -59,6 +62,8 @@ a {
   flex: 1;
   padding: 24px;
   max-width: 1100px;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .card {
@@ -115,6 +120,18 @@ td {
   text-align: left;
   padding: 8px;
   border-bottom: 1px solid var(--border);
+}
+
+/* Reveal-on-hover row actions (e.g. UsersPage's delete button) — invisible
+ * but still laid out (not display:none) so the column doesn't jump width
+ * when it appears. */
+.row-actions {
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+tr:hover .row-actions {
+  opacity: 1;
 }
 
 .muted {
