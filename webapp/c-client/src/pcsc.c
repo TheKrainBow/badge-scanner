@@ -6,8 +6,14 @@
 
 #if defined(__has_include)
 #  if __has_include(<winscard.h>)
+#    if __has_include(<wintypes.h>)
+#      include <wintypes.h>
+#    endif
 #    include <winscard.h>
 #  elif __has_include(<PCSC/winscard.h>)
+#    if __has_include(<PCSC/wintypes.h>)
+#      include <PCSC/wintypes.h>
+#    endif
 #    include <PCSC/winscard.h>
 #  else
 #    error "winscard.h not found — install libpcsclite-dev (Debian/Ubuntu) or pcsc-lite-devel (Fedora)"
